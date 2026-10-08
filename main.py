@@ -1,16 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
-from fastapi import Response
 from dataclasses import asdict
 
 from repository import TaskNotFoundError
-from sqlite_repository import SqliteTaskRepository, init_db, get_db_connection
+from postgres_repository import PostgresTaskRepository, init_db
 
 app = FastAPI()
 
-repo = SqliteTaskRepository()
+repo = PostgresTaskRepository()
 
 
 @app.on_event("startup")
@@ -60,27 +59,14 @@ def get_task(task_id: int):
     return asdict(repo.get_by_id(task_id))
 
 
-# --- still on the old direct-sqlite path, to be migrated next ---
-
 @app.post("/tasks", description="Create a new task")
 def create_task(task: TaskIn):
     if not task.title:
         return JSONResponse(status_code=400, content={"error": "Title is missing"})
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        (task.title, int(task.done)),
-    )
-    new_id = cursor.lastrowid
-    conn.commit()
-    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (new_id,))
-    row = cursor.fetchone()
-    conn.close()
     return JSONResponse(
         status_code=201,
-        content={"id": row["id"], "title": row["title"], "done": bool(row["done"])},
+        content=asdict(repo.create(task.title, task.done)),
     )
 
 
@@ -95,45 +81,10 @@ def update_task(task_id: int, task: TaskUpdate):
             status_code=400, content={"error": "Title cannot be empty"}
         )
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
-    if cursor.fetchone() is None:
-        conn.close()
-        return JSONResponse(
-            status_code=404,
-            content={"error": f"Task {task_id} not found"},
-        )
-
-    fields, values = [], []
-    if task.title is not None:
-        fields.append("title = ?")
-        values.append(task.title)
-    if task.done is not None:
-        fields.append("done = ?")
-        values.append(int(task.done))
-    cursor.execute(
-        f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", values + [task_id]
-    )
-    conn.commit()
-    cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
+    return asdict(repo.update(task_id, task.title, task.done))
 
 
 @app.delete("/tasks/{task_id}", description="Delete a task by ID")
 def delete_task(task_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    deleted = cursor.rowcount
-    conn.commit()
-    conn.close()
-
-    if deleted == 0:
-        return JSONResponse(
-            status_code=404,
-            content={"error": f"Task {task_id} not found"},
-        )
+    repo.delete(task_id)
     return Response(status_code=204)

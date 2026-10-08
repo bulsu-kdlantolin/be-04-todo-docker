@@ -1,83 +1,43 @@
-import sqlite3
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Optional
 
-from repository import Task, TaskNotFoundError
+
+@dataclass
+class Task:
+    id: int
+    title: str
+    done: bool
 
 
-DB_PATH = "tasks.db"
+class TaskNotFoundError(Exception):
+    def __init__(self, task_id: int):
+        self.task_id = task_id
+        super().__init__(f"Task {task_id} not found")
 
 
-def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db() -> None:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL,
-            done INTEGER NOT NULL DEFAULT 0
-        )
-    """)
-
-    cursor.execute("SELECT COUNT(*) FROM tasks")
-    count = cursor.fetchone()[0]
-
-    if count == 0:
-        cursor.executemany(
-            "INSERT INTO tasks (title, done) VALUES (?, ?)",
-            [
-                ("Buy groceries", 0),
-                ("Walk the dog", 0),
-                ("Write code", 1),
-            ],
-        )
-
-    conn.commit()
-    conn.close()
-
-
-def _row_to_task(row: sqlite3.Row) -> Task:
-    """The only place SQLite's 0/1 for `done` becomes a Python bool."""
-    return Task(
-        id=row["id"],
-        title=row["title"],
-        done=bool(row["done"]),
-    )
-
-
-class SqliteTaskRepository:
-    """SQLite-backed TaskRepository.
-
-    Only list_all and get_by_id are implemented for now; the remaining
-    three methods will be added in the next step, at which point this
-    class will inherit from ABC and satisfy the full contract.
-    """
-
+class TaskRepository(ABC):
+    @abstractmethod
     def list_all(self) -> list[Task]:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, title, done FROM tasks")
-        rows = cursor.fetchall()
-        conn.close()
-        return [_row_to_task(row) for row in rows]
+        """Return all tasks as a list."""
 
+    @abstractmethod
     def get_by_id(self, task_id: int) -> Task:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
+        """Return a task or raise TaskNotFoundError."""
 
-        if row is None:
-            raise TaskNotFoundError(task_id)
+    @abstractmethod
+    def create(self, title: str, done: bool = False) -> Task:
+        """Insert and return a task."""
 
-        return _row_to_task(row)
+    @abstractmethod
+    def update(
+        self,
+        task_id: int,
+        title: Optional[str] = None,
+        done: Optional[bool] = None,
+    ) -> Task:
+        """Update provided fields and return the task."""
+
+    @abstractmethod
+    def delete(self, task_id: int) -> None:
+        """Delete a task or raise TaskNotFoundError."""
